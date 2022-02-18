@@ -54,7 +54,7 @@ errorfilename = ltdata + '/logs/Errors{}.txt'.format(file_time_stamp)
 # Latest TLE data for ISS location
 location = ISS.coordinates()
 
-ISS.compute()
+# ISS.compute()
 
 
 def readAccelerations():
@@ -152,9 +152,9 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
         sleep(0.25)
         now_time = dt.datetime.now()
 
-        iss = ISS
+        # iss = ISS
         # Compute ISS location
-        iss.compute()
+        # iss.compute()
 
         # Convert the latitude and longitude to EXIF-appropriate representations
         south, exif_latitude = convert(iss.sublat)
