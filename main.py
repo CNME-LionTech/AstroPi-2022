@@ -11,7 +11,8 @@ from sense_hat import SenseHat
 import datetime as dt
 from time import sleep
 from picamera import PiCamera
-from ephem import readtle, degree
+from orbit import ISS
+from skyfield.api import load
 import os, csv
 
 # SenseHat Initialisation
@@ -20,7 +21,7 @@ sense.clear()
 
 # Starting the camera
 cam = PiCamera()
-cam.resolution = (1920, 1080)
+cam.resolution = (1296, 972)
 
 # Mission parameters
 missiontime = 175       # Running time in minutes
@@ -51,13 +52,9 @@ logfilename = ltdata + '/logs/LionTech_Log_{}.csv'.format(file_time_stamp)
 errorfilename = ltdata + '/logs/Errors{}.txt'.format(file_time_stamp)
 
 # Latest TLE data for ISS location
-name = "ISS (ZARYA)"
-line1 = "1 25544U 98067A   21044.74781537  .00000127  00000-0  10467-4 0  9995"
-line2 = "2 25544  51.6433 233.2678 0002756  10.4033  94.8094 15.48960066269462"
+location = ISS.coordinates()
 
-# Retrieve ISS position
-iss = readtle(name, line1, line2)
-iss.compute()
+ISS.compute()
 
 
 def readAccelerations():
@@ -134,6 +131,8 @@ def add_csv_data(data_file, data):
     with open(data_file, 'a') as f:
         writer = csv.writer(f)
         writer.writerow(data)
+    
+
 
 
 
@@ -153,6 +152,7 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
         sleep(0.25)
         now_time = dt.datetime.now()
 
+        iss = ISS
         # Compute ISS location
         iss.compute()
 
@@ -169,11 +169,15 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
         accelX, accelY, accelZ = readAccelerations()
         compassMag, compassX, compassY, compassZ = readCompass()
         pitch, roll, yaw = readOrientation()
-        lat = round(iss.sublat/degree, 5)
-        lon = round(iss.sublong/degree, 5)
+
+        #This method returns the location of the ISS
+        t = load.timescale().now()
+        position = ISS.at(t)
+        location = position.subpoint()
+        
 
         # Zip readings in a single variable and write them to the csv
-        rowdata = (team, now_time,lon, lat, height, temperature,temp_p,humidity,pressure,accelX,accelY, accelZ, compassMag, compassX, compassY, compassZ, pitch, roll, yaw)
+        rowdata = (team, now_time,location.longitude, location.latitude, location.elevation.km, temperature,temp_p,humidity,pressure,accelX,accelY, accelZ, compassMag, compassX, compassY, compassZ, pitch, roll, yaw)
         add_csv_data(logfilename, rowdata)
 	    # print(team,now_time,lon,lat,temperature,temp_p,humidity,pressure,accelX,accelY, accelZ, compassMag, compassX, compassY, compassZ, pitch, roll, yaw)
 
@@ -183,9 +187,9 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
 
         # Set the EXIF tags specifying the current location
         cam.exif_tags['GPS.GPSLatitude'] = exif_latitude
-        cam.exif_tags['GPS.GPSLatitudeRef'] = 'S' if south else 'N'
+        cam.exif_tags['GPS.GPSLatitudeRef'] = "S" if south else "N"
         cam.exif_tags['GPS.GPSLongitude'] = exif_longitude
-        cam.exif_tags['GPS.GPSLongitudeRef'] = 'W' if west else 'E'
+        cam.exif_tags['GPS.GPSLongitudeRef'] = "W" if west else "E"
 
         # Image capture
         if now_time > last_photo_time + dt.timedelta(seconds = photo_delay):
