@@ -11,8 +11,9 @@ from sense_hat import SenseHat
 import datetime as dt
 from time import sleep
 from picamera import PiCamera
-from ephem import readtle, degree
-import os, csv
+from orbit import ISS
+from skyfield.api import load
+import os, csv, sys
 
 # SenseHat Initialisation
 sense = SenseHat()
@@ -20,13 +21,13 @@ sense.clear()
 
 # Starting the camera
 cam = PiCamera()
-cam.resolution = (1920, 1080)
+cam.resolution = (2592, 1944)
 
 # Mission parameters
 missiontime = 175       # Running time in minutes
 team = 'LionTech'       # AstroPi team name
 photo_counter = 1
-photo_delay = 7.5
+photo_delay = 10
 
 # Working path definition
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -36,28 +37,26 @@ start_time = dt.datetime.now()
 now_time = dt.datetime.now()
 last_photo_time = dt.datetime.now()
 file_time_stamp = start_time.strftime('%Y%b%d_%Hh%Mm%Ss')
+timescale = load.timescale()
+
+# Load ephemeris data
+ephemeris = load('de421.bsp')
 
 # Create folders for images and logs
 ltdata = dir_path + '/LTdata'
 if (not os.path.exists(ltdata)):
     os.mkdir(ltdata)
-if (not os.path.exists(ltdata + "/logs/")):
-    os.mkdir(ltdata + "/logs/")
-if (not os.path.exists(ltdata + "/images/")):
-    os.mkdir(ltdata + "/images/")
+if (not os.path.exists(ltdata + '/logs/')):
+    os.mkdir(ltdata + '/logs/')
+if (not os.path.exists(ltdata + '/images/')):
+    os.mkdir(ltdata + '/images/')
 if (not os.path.exists(ltdata + '/images/{}'.format(file_time_stamp))):
     os.mkdir(ltdata + '/images/{}'.format(file_time_stamp))
 logfilename = ltdata + '/logs/LionTech_Log_{}.csv'.format(file_time_stamp)
 errorfilename = ltdata + '/logs/Errors{}.txt'.format(file_time_stamp)
 
 # Latest TLE data for ISS location
-name = "ISS (ZARYA)"
-line1 = "1 25544U 98067A   21044.74781537  .00000127  00000-0  10467-4 0  9995"
-line2 = "2 25544  51.6433 233.2678 0002756  10.4033  94.8094 15.48960066269462"
-
-# Retrieve ISS position
-iss = readtle(name, line1, line2)
-iss.compute()
+location = ISS.coordinates()
 
 
 def readAccelerations():
@@ -110,8 +109,7 @@ def convert(angle):
     containing a boolean and the converted angle, with the
     boolean indicating if the angle is negative.
     """
-    
-    degrees, minutes, seconds = (float(field) for field in str(angle).split(':'))
+    sign, degrees, minutes, seconds = angle.signed_dms()
     exif_angle = '{:.0f}/1,{:.0f}/1,{:.0f}/10'.format(abs(degrees), minutes, seconds*10)
 
     return degrees < 0, exif_angle
@@ -121,9 +119,9 @@ def create_csv(data_file):
     """ Creates the CSV file and the header of the log file.
     """
     
-    with open(data_file, 'w') as f:
+    with open(data_file, 'w', buffering=1) as f:
         writer = csv.writer(f)
-        header = ("Team","Timestamp","Longitude", "Latitude","Height","Temperature","Temp_from_pressure","Humidity","Pressure","AccelX","AccelY","AccelZ","CompassMag","CompassX","CompassY","CompassZ","Pitch","Roll","Yaw")
+        header = ('Team','Timestamp','Longitude','Latitude','Height','Temperature','Temp_from_pressure','Humidity','Pressure','AccelX','AccelY','AccelZ','CompassMag','CompassX','CompassY','CompassZ','Pitch','Roll','Yaw')
         writer.writerow(header)
 
 
@@ -131,10 +129,29 @@ def add_csv_data(data_file, data):
     """ Function to add data to the CSV log file.
     """
     
-    with open(data_file, 'a') as f:
+    with open(data_file, 'a', buffering = 1) as f:
         writer = csv.writer(f)
         writer.writerow(data)
+    
 
+# Print iterations progress
+def printProgress (iteration, total, prefix = '', suffix = '', decimals = 1):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+    """
+    percent = ('{:' + str(decimals+4) + '.' + str(decimals) + 'f}').format(100 * (iteration / float(total)))
+    print('{} {}% {}'.format(prefix, percent, suffix), flush=True)
+    sys.stdout.flush()
+
+    # Print New Line on Complete
+    if iteration == total: 
+        print()
 
 
 # main programm
@@ -143,10 +160,14 @@ print('- Systems checked at:         {}'.format(now_time.strftime('%Y-%b-%d %Hh%
 print('- Data collection started at: {}'.format(now_time.strftime('%Y-%b-%d %Hh%Mm%Ss')))
 print('- Collecting data .................................')
 
-create_csv(logfilename)
-#print("Longitude, Latitude, Height,Temperature,temp_p,humidity,pressure,accel, compass, orient")
+try: 
+    create_csv(logfilename)
+except Exception as e:
+    with open(errorfilename, 'a') as f:
+        f.write('Mission error: ' + str(e) + '\n')
 
-while (now_time < start_time + dt.timedelta(minutes=missiontime)):
+current_iteration = 0
+while (now_time < start_time + dt.timedelta(minutes = missiontime)):
 
     try:
         # Update the current time
@@ -154,12 +175,14 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
         now_time = dt.datetime.now()
 
         # Compute ISS location
-        iss.compute()
+        location = ISS.coordinates()
+        latitude = round(location.latitude.degrees, 6)
+        longitude = round(location.longitude.degrees, 6)
+        height = round(location.elevation.km, 2)
 
         # Convert the latitude and longitude to EXIF-appropriate representations
-        south, exif_latitude = convert(iss.sublat)
-        west, exif_longitude = convert(iss.sublong)
-        height = round(iss.elevation,2)
+        south, exif_latitude = convert(location.latitude)
+        west, exif_longitude = convert(location.longitude)        
 
         # Read the temperature, humidity, pressure and other data from the SenseHat
         temperature = round(sense.get_temperature(), 3)
@@ -169,33 +192,42 @@ while (now_time < start_time + dt.timedelta(minutes=missiontime)):
         accelX, accelY, accelZ = readAccelerations()
         compassMag, compassX, compassY, compassZ = readCompass()
         pitch, roll, yaw = readOrientation()
-        lat = round(iss.sublat/degree, 5)
-        lon = round(iss.sublong/degree, 5)
 
         # Zip readings in a single variable and write them to the csv
-        rowdata = (team, now_time,lon, lat, height, temperature,temp_p,humidity,pressure,accelX,accelY, accelZ, compassMag, compassX, compassY, compassZ, pitch, roll, yaw)
+        rowdata = (team, now_time,longitude,latitude,height,temperature,temp_p,humidity,pressure,accelX,accelY,accelZ,compassMag,compassX,compassY,compassZ,pitch,roll,yaw)
         add_csv_data(logfilename, rowdata)
-	    # print(team,now_time,lon,lat,temperature,temp_p,humidity,pressure,accelX,accelY, accelZ, compassMag, compassX, compassY, compassZ, pitch, roll, yaw)
+        # print(rowdata)
 
         # Convert the latitude and longitude to EXIF-appropriate representations
-        south, exif_latitude = convert(iss.sublat)
-        west, exif_longitude = convert(iss.sublong)
+        south, exif_latitude = convert(location.latitude)
+        west, exif_longitude = convert(location.longitude)
 
         # Set the EXIF tags specifying the current location
         cam.exif_tags['GPS.GPSLatitude'] = exif_latitude
-        cam.exif_tags['GPS.GPSLatitudeRef'] = 'S' if south else 'N'
+        cam.exif_tags['GPS.GPSLatitudeRef'] = "S" if south else "N"
         cam.exif_tags['GPS.GPSLongitude'] = exif_longitude
-        cam.exif_tags['GPS.GPSLongitudeRef'] = 'W' if west else 'E'
+        cam.exif_tags['GPS.GPSLongitudeRef'] = "W" if west else "E"
 
         # Image capture
         if now_time > last_photo_time + dt.timedelta(seconds = photo_delay):
-            cam.capture(ltdata + '/images/{}/LTech_{:04d}.jpg'.format(file_time_stamp, photo_counter))
-            photo_counter +=1
-            last_photo_time = now_time
+            t = timescale.now()
+            if ISS.at(t).is_sunlit(ephemeris):
+                cam.capture(ltdata + '/images/{}/LTech_{:04d}.jpg'.format(file_time_stamp, photo_counter))
+                photo_counter += 1
+                last_photo_time = now_time
+                with open(errorfilename, 'a') as f:
+                    f.write('Mission update: {} ISS in light\n'.format(now_time))
+            else:
+                with open(errorfilename, 'a') as f:
+                    f.write('Mission update: {} ISS in shadow\n'.format(now_time))
+        last_iteration = current_iteration
+        current_iteration = (now_time - start_time).seconds // 600 # mesuring time progress by 10 minutes 
+        if current_iteration != last_iteration:
+            printProgress(current_iteration * 10, missiontime, prefix = '-   Progress:', suffix = 'Complete')
 
     except Exception as e:
-        with open(errorfilename, 'w') as f:
-            f.write('Mission error: ' + str(e))
+        with open(errorfilename, 'a') as f:
+            f.write('Mission error: ' + str(e) + '\n')
 
 print('- Mission ended at:           {}'.format(now_time.strftime('%Y-%b-%d %Hh%Mm%Ss')))
 print('- Total runtime:              {}'.format((now_time - start_time)))
